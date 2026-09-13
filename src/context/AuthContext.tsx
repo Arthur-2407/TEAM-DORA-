@@ -501,7 +501,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setProfile(null);
     setSession(null);
     if (typeof window !== 'undefined') {
-      window.location.href = '/login';
+      const basePath = process.env.NEXT_PUBLIC_BASE_PATH || '';
+      window.location.href = `${basePath}/login`;
     }
   };
 
