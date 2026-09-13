@@ -115,7 +115,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const supabase = createClient();
   const configured = isSupabaseConfigured();
 
-  const fetchProfile = useCallback(async (userId: string) => {
+  const fetchProfile = useCallback(async (userId: string, fallbackUsername?: string) => {
     if (!configured) return;
     try {
       const { data, error } = await supabase
@@ -129,20 +129,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } else if (error) {
         console.warn('Could not fetch remote profile:', error.message || error);
         setProfile((prev) => prev || {
-          ...INITIAL_DEMO_PROFILE,
-          id: userId,
-          username: 'OPERATIVE',
+          ...createInitialUserProfile(userId, fallbackUsername || user?.user_metadata?.username || 'OPERATIVE'),
         });
       }
     } catch (e) {
       console.warn('Could not fetch remote profile:', e);
       setProfile((prev) => prev || {
-        ...INITIAL_DEMO_PROFILE,
-        id: userId,
-        username: 'OPERATIVE',
+        ...createInitialUserProfile(userId, fallbackUsername || user?.user_metadata?.username || 'OPERATIVE'),
       });
     }
-  }, [configured, supabase]);
+  }, [configured, supabase, user]);
 
   const refreshProfile = useCallback(async () => {
     if (typeof window === 'undefined') return;
@@ -379,6 +375,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     if (data.user && data.session) {
+      setUser(data.user);
+      setSession(data.session);
+      if (typeof window !== 'undefined') {
+        localStorage.removeItem('nexus_demo_active');
+        document.cookie = 'nexus_auth_session=true; path=/; max-age=2592000; SameSite=Lax';
+        document.cookie = 'nexus_demo_active=; path=/; max-age=0; SameSite=Lax';
+      }
       try {
         await supabase.from('profiles').upsert({
           id: data.user.id,
@@ -390,6 +393,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } catch (err) {
         console.warn('Direct profile creation note:', err);
       }
+      await fetchProfile(data.user.id, trimmedUsername);
     }
 
     return { error: null };
@@ -452,8 +456,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     // Supabase Cloud Mode
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    return { error: error?.message ?? null };
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) {
+      return { error: error.message };
+    }
+
+    if (data.user) {
+      setUser(data.user);
+      setSession(data.session);
+      setIsDemo(false);
+      if (typeof window !== 'undefined') {
+        localStorage.removeItem('nexus_demo_active');
+        document.cookie = 'nexus_auth_session=true; path=/; max-age=2592000; SameSite=Lax';
+        document.cookie = 'nexus_demo_active=; path=/; max-age=0; SameSite=Lax';
+      }
+      await fetchProfile(data.user.id, data.user.user_metadata?.username);
+    }
+
+    return { error: null };
   };
 
   const loginAsDemo = async () => {
