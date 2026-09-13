@@ -21,7 +21,8 @@ const INITIAL_SHOP_ITEMS: ShopItem[] = [
   { id: 'item-12', name: 'Champion of Reality', description: 'Legendary title for masters of life gamification.', item_type: 'title', price: 400, icon: '👑', rarity: 'legendary', metadata: {} },
 ];
 
-const DEMO_INVENTORY_KEY = 'nexus_demo_inventory_v1';
+const DEMO_INVENTORY_KEY = 'nexus_demo_inventory_v2';
+const getUserInventoryKey = (userId: string) => `nexus_inventory_${userId}`;
 
 const INITIAL_DEMO_INVENTORY: InventoryItem[] = [
   {
@@ -44,17 +45,24 @@ export function useShop() {
   const supabase = createClient();
   const configured = isSupabaseConfigured();
 
+  const getStorageKey = useCallback(() => {
+    if (isDemo || !user) return DEMO_INVENTORY_KEY;
+    return getUserInventoryKey(user.id);
+  }, [isDemo, user]);
+
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
       if (isDemo || !configured || !user) {
         if (typeof window !== 'undefined') {
-          const stored = localStorage.getItem(DEMO_INVENTORY_KEY);
+          const key = getStorageKey();
+          const stored = localStorage.getItem(key);
           if (stored) {
             setInventory(JSON.parse(stored));
           } else {
-            setInventory(INITIAL_DEMO_INVENTORY);
-            localStorage.setItem(DEMO_INVENTORY_KEY, JSON.stringify(INITIAL_DEMO_INVENTORY));
+            const initial = isDemo || !user ? INITIAL_DEMO_INVENTORY : [];
+            setInventory(initial);
+            localStorage.setItem(key, JSON.stringify(initial));
           }
         }
         setItems(INITIAL_SHOP_ITEMS);
@@ -74,8 +82,9 @@ export function useShop() {
         if (invErr) {
           console.warn('Supabase inventory query failed (tables may not exist yet) — using local inventory:', invErr.message);
           if (typeof window !== 'undefined') {
-            const stored = localStorage.getItem(DEMO_INVENTORY_KEY);
-            setInventory(stored ? JSON.parse(stored) : INITIAL_DEMO_INVENTORY);
+            const key = getStorageKey();
+            const stored = localStorage.getItem(key);
+            setInventory(stored ? JSON.parse(stored) : []);
           }
         } else {
           setInventory(invData || []);
@@ -86,8 +95,7 @@ export function useShop() {
     } finally {
       setLoading(false);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, isDemo, configured]);
+  }, [user, isDemo, configured, getStorageKey]);
 
   useEffect(() => {
     loadData();
@@ -111,7 +119,8 @@ export function useShop() {
     const updatedInv = [newInvItem, ...inventory];
     setInventory(updatedInv);
     if (typeof window !== 'undefined') {
-      localStorage.setItem(DEMO_INVENTORY_KEY, JSON.stringify(updatedInv));
+      const key = getStorageKey();
+      localStorage.setItem(key, JSON.stringify(updatedInv));
     }
 
     addToast({
@@ -188,7 +197,8 @@ export function useShop() {
     setInventory(updated);
 
     if (typeof window !== 'undefined') {
-      localStorage.setItem(DEMO_INVENTORY_KEY, JSON.stringify(updated));
+      const key = getStorageKey();
+      localStorage.setItem(key, JSON.stringify(updated));
     }
 
     const item = updated.find((i) => i.item_id === itemId);

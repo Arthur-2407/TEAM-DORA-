@@ -7,7 +7,8 @@ import { useToast } from '@/context/ToastContext';
 import { calculateLevelUp } from '@/lib/xp';
 import type { Task, CompleteTaskResponse } from '@/lib/types';
 
-const DEMO_TASKS_KEY = 'nexus_demo_tasks_v1';
+const DEMO_TASKS_KEY = 'nexus_demo_tasks_v2';
+const getUserTasksKey = (userId: string) => `nexus_tasks_${userId}`;
 
 const INITIAL_DEMO_TASKS: Task[] = [
   {
@@ -114,6 +115,16 @@ const INITIAL_DEMO_TASKS: Task[] = [
   },
 ];
 
+function getInitialTasksForUser(userId: string): Task[] {
+  return INITIAL_DEMO_TASKS.map((t, idx) => ({
+    ...t,
+    id: `task-${userId}-${idx + 1}`,
+    user_id: userId,
+    is_completed: false,
+    completed_at: null,
+  }));
+}
+
 export function useTasks() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
@@ -127,18 +138,25 @@ export function useTasks() {
   const supabase = createClient();
   const configured = isSupabaseConfigured();
 
+  const getStorageKey = useCallback(() => {
+    if (isDemo || !user) return DEMO_TASKS_KEY;
+    return getUserTasksKey(user.id);
+  }, [isDemo, user]);
+
   // Load tasks
   const loadTasks = useCallback(async () => {
     setLoading(true);
     try {
       if (isDemo || !configured || !user) {
         if (typeof window !== 'undefined') {
-          const stored = localStorage.getItem(DEMO_TASKS_KEY);
+          const key = getStorageKey();
+          const stored = localStorage.getItem(key);
           if (stored) {
             setTasks(JSON.parse(stored));
           } else {
-            setTasks(INITIAL_DEMO_TASKS);
-            localStorage.setItem(DEMO_TASKS_KEY, JSON.stringify(INITIAL_DEMO_TASKS));
+            const initial = isDemo || !user ? INITIAL_DEMO_TASKS : getInitialTasksForUser(user.id);
+            setTasks(initial);
+            localStorage.setItem(key, JSON.stringify(initial));
           }
         }
       } else {
@@ -149,16 +167,18 @@ export function useTasks() {
           .order('created_at', { ascending: false });
 
         if (error) {
-          // Gracefully fall back to demo tasks when tables don't exist
+          // Gracefully fall back to local tasks when tables don't exist
           if (error.code === 'PGRST205' || error.code === '42P01') {
-            console.warn('Supabase tables not found — falling back to local demo mode. Run the migration SQL in supabase/migrations/001_initial_schema.sql');
+            console.warn('Supabase tables not found — falling back to local mode. Run the migration SQL in supabase/migrations/001_initial_schema.sql');
             if (typeof window !== 'undefined') {
-              const stored = localStorage.getItem(DEMO_TASKS_KEY);
+              const key = getStorageKey();
+              const stored = localStorage.getItem(key);
               if (stored) {
                 setTasks(JSON.parse(stored));
               } else {
-                setTasks(INITIAL_DEMO_TASKS);
-                localStorage.setItem(DEMO_TASKS_KEY, JSON.stringify(INITIAL_DEMO_TASKS));
+                const initial = getInitialTasksForUser(user.id);
+                setTasks(initial);
+                localStorage.setItem(key, JSON.stringify(initial));
               }
             }
             return;
@@ -172,8 +192,7 @@ export function useTasks() {
     } finally {
       setLoading(false);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, isDemo, configured]);
+  }, [user, isDemo, configured, getStorageKey]);
 
   useEffect(() => {
     loadTasks();
@@ -198,8 +217,9 @@ export function useTasks() {
 
     if (isDemo || !configured || !user) {
       if (typeof window !== 'undefined') {
-        const current = JSON.parse(localStorage.getItem(DEMO_TASKS_KEY) || '[]');
-        localStorage.setItem(DEMO_TASKS_KEY, JSON.stringify([newTask, ...current]));
+        const key = getStorageKey();
+        const current = JSON.parse(localStorage.getItem(key) || '[]');
+        localStorage.setItem(key, JSON.stringify([newTask, ...current]));
       }
       addToast({
         type: 'success',
@@ -210,61 +230,35 @@ export function useTasks() {
     }
 
     try {
-      const { data, error } = await supabase
-        .from('tasks')
-        .insert([
-          {
-            user_id: user.id,
-            title: newTask.title,
-            description: newTask.description,
-            difficulty: newTask.difficulty,
-            category: newTask.category,
-            xp_reward: newTask.xp_reward,
-            credit_reward: newTask.credit_reward,
-            is_recurring: newTask.is_recurring,
-            recurrence_pattern: newTask.recurrence_pattern,
-            due_date: newTask.due_date,
-          },
-        ])
-        .select()
-        .single();
-
+      const { error } = await supabase.from('tasks').insert([newTask]);
       if (error) {
         if (error.code === 'PGRST205' || error.code === '42P01') {
-          console.warn('Tasks table not found in Supabase — mission stored locally');
           if (typeof window !== 'undefined') {
-            const current: Task[] = JSON.parse(localStorage.getItem(DEMO_TASKS_KEY) || '[]');
-            localStorage.setItem(
-              DEMO_TASKS_KEY,
-              JSON.stringify([newTask, ...current.filter((t: Task) => t.id !== newTask.id)])
-            );
+            const key = getStorageKey();
+            const current = JSON.parse(localStorage.getItem(key) || '[]');
+            localStorage.setItem(key, JSON.stringify([newTask, ...current]));
           }
           addToast({
             type: 'success',
-            title: 'Mission Initialized (Local)',
-            description: 'Stored in local memory cache.',
+            title: 'Mission Uploaded (Local)',
+            description: `Objective "${newTask.title}" added to local queue.`,
           });
           return;
         }
         throw error;
       }
-      if (data) {
-        setTasks((prev) => prev.map((t) => (t.id === newTask.id ? data : t)));
-      }
       addToast({
         type: 'success',
-        title: 'Mission Initialized',
-        description: `Objective recorded securely in the Neural Grid.`,
+        title: 'Mission Transmitted',
+        description: `Objective "${newTask.title}" locked into neural grid.`,
       });
     } catch (err: unknown) {
-      // Revert optimistic update on failure
       setTasks((prev) => prev.filter((t) => t.id !== newTask.id));
       addToast({
         type: 'error',
-        title: 'Upload Failed',
-        description: err instanceof Error ? err.message : 'Could not synchronize with grid.',
+        title: 'Deployment Failed',
+        description: err instanceof Error ? err.message : 'Could not save mission.',
       });
-      throw err;
     }
   };
 
@@ -280,9 +274,10 @@ export function useTasks() {
 
     if (isDemo || !configured || !user) {
       if (typeof window !== 'undefined') {
-        const current: Task[] = JSON.parse(localStorage.getItem(DEMO_TASKS_KEY) || '[]');
+        const key = getStorageKey();
+        const current: Task[] = JSON.parse(localStorage.getItem(key) || '[]');
         const updated = current.map((t) => (t.id === id ? { ...t, ...updates } : t));
-        localStorage.setItem(DEMO_TASKS_KEY, JSON.stringify(updated));
+        localStorage.setItem(key, JSON.stringify(updated));
       }
       addToast({ type: 'success', title: 'Mission Parameters Updated' });
       return;
@@ -293,9 +288,10 @@ export function useTasks() {
       if (error) {
         if (error.code === 'PGRST205' || error.code === '42P01') {
           if (typeof window !== 'undefined') {
-            const current: Task[] = JSON.parse(localStorage.getItem(DEMO_TASKS_KEY) || '[]');
+            const key = getStorageKey();
+            const current: Task[] = JSON.parse(localStorage.getItem(key) || '[]');
             const updated = current.map((t) => (t.id === id ? { ...t, ...updates } : t));
-            localStorage.setItem(DEMO_TASKS_KEY, JSON.stringify(updated));
+            localStorage.setItem(key, JSON.stringify(updated));
           }
           addToast({ type: 'success', title: 'Mission Parameters Updated (Local)' });
           return;
@@ -316,11 +312,12 @@ export function useTasks() {
   // Local progression calculation helper
   const executeLocalProgression = (task: Task) => {
     if (typeof window !== 'undefined') {
-      const current: Task[] = JSON.parse(localStorage.getItem(DEMO_TASKS_KEY) || '[]');
+      const key = getStorageKey();
+      const current: Task[] = JSON.parse(localStorage.getItem(key) || '[]');
       const updated = current.map((t) =>
         t.id === task.id ? { ...t, is_completed: true, completed_at: new Date().toISOString() } : t
       );
-      localStorage.setItem(DEMO_TASKS_KEY, JSON.stringify(updated));
+      localStorage.setItem(key, JSON.stringify(updated));
     }
 
     if (profile) {
@@ -432,8 +429,9 @@ export function useTasks() {
 
     if (isDemo || !configured || !user) {
       if (typeof window !== 'undefined') {
-        const current: Task[] = JSON.parse(localStorage.getItem(DEMO_TASKS_KEY) || '[]');
-        localStorage.setItem(DEMO_TASKS_KEY, JSON.stringify(current.filter((t) => t.id !== id)));
+        const key = getStorageKey();
+        const current: Task[] = JSON.parse(localStorage.getItem(key) || '[]');
+        localStorage.setItem(key, JSON.stringify(current.filter((t) => t.id !== id)));
       }
       addToast({ type: 'success', title: 'Mission Aborted' });
       return;
@@ -444,8 +442,9 @@ export function useTasks() {
       if (error) {
         if (error.code === 'PGRST205' || error.code === '42P01') {
           if (typeof window !== 'undefined') {
-            const current: Task[] = JSON.parse(localStorage.getItem(DEMO_TASKS_KEY) || '[]');
-            localStorage.setItem(DEMO_TASKS_KEY, JSON.stringify(current.filter((t) => t.id !== id)));
+            const key = getStorageKey();
+            const current: Task[] = JSON.parse(localStorage.getItem(key) || '[]');
+            localStorage.setItem(key, JSON.stringify(current.filter((t) => t.id !== id)));
           }
           addToast({ type: 'success', title: 'Mission Expunged (Local)' });
           return;

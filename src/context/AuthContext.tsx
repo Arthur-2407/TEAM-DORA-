@@ -21,7 +21,19 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const DEMO_PROFILE_STORAGE_KEY = 'nexus_demo_profile_v1';
+// Local Storage Keys
+const LOCAL_USERS_STORAGE_KEY = 'nexus_local_users_v2';
+const DEMO_PROFILE_STORAGE_KEY = 'nexus_demo_profile_v2';
+
+export const getUserProfileKey = (userId: string) => `nexus_profile_${userId}`;
+
+interface LocalUserRecord {
+  id: string;
+  email: string;
+  password: string;
+  username: string;
+  created_at: string;
+}
 
 const INITIAL_DEMO_PROFILE: Profile = {
   id: 'demo-agent-007',
@@ -54,6 +66,45 @@ const STATIC_DEMO_USER: User = {
   created_at: '2026-01-01T00:00:00.000Z',
 } as unknown as User;
 
+function getLocalUsers(): LocalUserRecord[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(LOCAL_USERS_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveLocalUsers(users: LocalUserRecord[]) {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem(LOCAL_USERS_STORAGE_KEY, JSON.stringify(users));
+}
+
+function createInitialUserProfile(userId: string, username: string): Profile {
+  return {
+    id: userId,
+    username: username.trim(),
+    avatar_url: null,
+    level: 1,
+    current_xp: 0,
+    xp_to_next_level: 100,
+    total_xp: 0,
+    credits: 50,
+    current_streak: 1,
+    longest_streak: 1,
+    last_activity_date: new Date().toISOString().split('T')[0],
+    strength: 1,
+    intellect: 1,
+    discipline: 1,
+    vitality: 1,
+    charisma: 1,
+    creativity: 1,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
@@ -80,7 +131,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setProfile((prev) => prev || {
           ...INITIAL_DEMO_PROFILE,
           id: userId,
-          username: 'K41-CYPHER',
+          username: 'OPERATIVE',
         });
       }
     } catch (e) {
@@ -88,12 +139,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setProfile((prev) => prev || {
         ...INITIAL_DEMO_PROFILE,
         id: userId,
-        username: 'K41-CYPHER',
+        username: 'OPERATIVE',
       });
     }
   }, [configured, supabase]);
 
   const refreshProfile = useCallback(async () => {
+    if (typeof window === 'undefined') return;
+
     if (isDemo) {
       const stored = localStorage.getItem(DEMO_PROFILE_STORAGE_KEY);
       if (stored) {
@@ -105,28 +158,50 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       return;
     }
+
+    if (!configured && user) {
+      const stored = localStorage.getItem(getUserProfileKey(user.id));
+      if (stored) {
+        try {
+          setProfile(JSON.parse(stored));
+        } catch {
+          // ignore
+        }
+      }
+      return;
+    }
+
     if (user) {
       await fetchProfile(user.id);
     }
-  }, [user, fetchProfile, isDemo]);
+  }, [user, fetchProfile, isDemo, configured]);
 
   const updateDemoProfile = useCallback((updater: (prev: Profile) => Profile) => {
     setProfile((prev) => {
-      const base = prev || INITIAL_DEMO_PROFILE;
+      const base = prev || (isDemo ? INITIAL_DEMO_PROFILE : createInitialUserProfile(user?.id || 'unknown', user?.user_metadata?.username || 'OPERATIVE'));
       const updated = updater(base);
       if (typeof window !== 'undefined') {
-        localStorage.setItem(DEMO_PROFILE_STORAGE_KEY, JSON.stringify(updated));
+        if (isDemo || !user) {
+          localStorage.setItem(DEMO_PROFILE_STORAGE_KEY, JSON.stringify(updated));
+        } else {
+          localStorage.setItem(getUserProfileKey(user.id), JSON.stringify(updated));
+        }
       }
       return updated;
     });
-  }, []);
+  }, [isDemo, user]);
 
   useEffect(() => {
-    // 1. Check demo mode in localStorage first
-    if (typeof window !== 'undefined') {
+    if (typeof window === 'undefined') return;
+
+    // 1. If Supabase is NOT configured, handle local storage vault & demo
+    if (!configured) {
       const demoActive = localStorage.getItem('nexus_demo_active') === 'true';
+      const activeUserId = localStorage.getItem('nexus_active_user_id');
+
       if (demoActive) {
         document.cookie = 'nexus_demo_active=true; path=/; max-age=2592000; SameSite=Lax';
+        document.cookie = 'nexus_auth_session=; path=/; max-age=0; SameSite=Lax';
         setIsDemo(true);
         const stored = localStorage.getItem(DEMO_PROFILE_STORAGE_KEY);
         if (stored) {
@@ -143,25 +218,54 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setLoading(false);
         return;
       }
-    }
 
-    // 2. Fallback to demo mode if Supabase not configured and not on an auth page
-    if (!configured) {
-      const isAuthPage = typeof window !== 'undefined' && 
-        (window.location.pathname.startsWith('/login') || window.location.pathname.startsWith('/signup'));
-      if (!isAuthPage) {
-        if (typeof window !== 'undefined') {
-          document.cookie = 'nexus_demo_active=true; path=/; max-age=2592000; SameSite=Lax';
+      if (activeUserId) {
+        const users = getLocalUsers();
+        const found = users.find((u) => u.id === activeUserId);
+        if (found) {
+          document.cookie = 'nexus_auth_session=true; path=/; max-age=2592000; SameSite=Lax';
+          document.cookie = 'nexus_demo_active=; path=/; max-age=0; SameSite=Lax';
+          setIsDemo(false);
+          const profKey = getUserProfileKey(found.id);
+          const stored = localStorage.getItem(profKey);
+          let loadedProf: Profile;
+          if (stored) {
+            try {
+              loadedProf = JSON.parse(stored);
+            } catch {
+              loadedProf = createInitialUserProfile(found.id, found.username);
+            }
+          } else {
+            loadedProf = createInitialUserProfile(found.id, found.username);
+            localStorage.setItem(profKey, JSON.stringify(loadedProf));
+          }
+          setProfile(loadedProf);
+          setUser({
+            id: found.id,
+            email: found.email,
+            user_metadata: { username: found.username },
+            app_metadata: {},
+            aud: 'authenticated',
+            created_at: found.created_at,
+          } as unknown as User);
+          setLoading(false);
+          return;
+        } else {
+          // Stale user ID
+          localStorage.removeItem('nexus_active_user_id');
+          document.cookie = 'nexus_auth_session=; path=/; max-age=0; SameSite=Lax';
         }
-        setIsDemo(true);
-        setProfile(INITIAL_DEMO_PROFILE);
-        setUser(STATIC_DEMO_USER);
       }
+
+      // Unauthenticated state
+      setIsDemo(false);
+      setUser(null);
+      setProfile(null);
       setLoading(false);
       return;
     }
 
-    // 3. Initialize Supabase session on mount
+    // 2. Initialize Supabase session on mount when configured
     const initAuth = async () => {
       try {
         const { data: { session: currentSession } } = await supabase.auth.getSession();
@@ -199,43 +303,67 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     return () => subscription.unsubscribe();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
+  }, [configured]);
 
   const signUp = async (email: string, password: string, username: string) => {
+    const trimmedUsername = username.trim();
+    const normalizedEmail = email.trim().toLowerCase();
+
+    if (!trimmedUsername) {
+      return { error: 'Callsign / Codename is required.' };
+    }
+
+    if (password.length < 6) {
+      return { error: 'Decryption passkey must be at least 6 characters.' };
+    }
+
+    // Local Vault Mode
     if (!configured) {
-      // Demo signup
-      const newProf: Profile = {
-        ...INITIAL_DEMO_PROFILE,
-        username,
-        level: 1,
-        current_xp: 0,
-        xp_to_next_level: 100,
-        total_xp: 0,
-        credits: 50,
-        current_streak: 1,
+      const existing = getLocalUsers();
+      if (existing.some((u) => u.email.toLowerCase() === normalizedEmail)) {
+        return { error: `An operative with identifier "${email.trim()}" is already enlisted.` };
+      }
+
+      const userId = `usr_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      const newUser: LocalUserRecord = {
+        id: userId,
+        email: normalizedEmail,
+        password,
+        username: trimmedUsername,
+        created_at: new Date().toISOString(),
       };
+
+      saveLocalUsers([...existing, newUser]);
+
+      const newProf = createInitialUserProfile(userId, trimmedUsername);
+      if (typeof window !== 'undefined') {
+        localStorage.setItem(getUserProfileKey(userId), JSON.stringify(newProf));
+        localStorage.setItem('nexus_active_user_id', userId);
+        localStorage.removeItem('nexus_demo_active');
+        document.cookie = 'nexus_auth_session=true; path=/; max-age=2592000; SameSite=Lax';
+        document.cookie = 'nexus_demo_active=; path=/; max-age=0; SameSite=Lax';
+      }
+
+      setIsDemo(false);
       setProfile(newProf);
-      localStorage.setItem(DEMO_PROFILE_STORAGE_KEY, JSON.stringify(newProf));
-      localStorage.setItem('nexus_demo_active', 'true');
-      document.cookie = 'nexus_demo_active=true; path=/; max-age=2592000; SameSite=Lax';
-      setIsDemo(true);
       setUser({
-        id: 'demo-agent-007',
-        email,
-        user_metadata: { username },
+        id: userId,
+        email: normalizedEmail,
+        user_metadata: { username: trimmedUsername },
         app_metadata: {},
         aud: 'authenticated',
-        created_at: new Date().toISOString(),
+        created_at: newUser.created_at,
       } as unknown as User);
+
       return { error: null };
     }
 
+    // Supabase Cloud Mode
     const { data, error } = await supabase.auth.signUp({
       email,
       password,
       options: {
-        data: { username },
+        data: { username: trimmedUsername },
       },
     });
 
@@ -243,7 +371,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return { error: error.message };
     }
 
-    // Check if session was returned or email confirmation is pending
     if (data.user && !data.session) {
       return {
         error: null,
@@ -255,7 +382,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       try {
         await supabase.from('profiles').upsert({
           id: data.user.id,
-          username,
+          username: trimmedUsername,
           current_xp: 0,
           level: 1,
           credits: 50,
@@ -269,35 +396,98 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const signIn = async (email: string, password: string) => {
+    const normalizedEmail = email.trim().toLowerCase();
+
+    // Local Vault Mode
     if (!configured) {
-      await loginAsDemo();
+      const existing = getLocalUsers();
+      const matched = existing.find((u) => u.email.toLowerCase() === normalizedEmail);
+
+      if (!matched) {
+        return {
+          error: `No operative found with identifier "${email.trim()}". Please verify your credentials or enlist a new operative.`,
+        };
+      }
+
+      if (matched.password !== password) {
+        return { error: 'Decryption passkey invalid. Access denied.' };
+      }
+
+      // Successful local authentication
+      const profKey = getUserProfileKey(matched.id);
+      let prof: Profile;
+      const storedProf = typeof window !== 'undefined' ? localStorage.getItem(profKey) : null;
+      if (storedProf) {
+        try {
+          prof = JSON.parse(storedProf);
+        } catch {
+          prof = createInitialUserProfile(matched.id, matched.username);
+        }
+      } else {
+        prof = createInitialUserProfile(matched.id, matched.username);
+        if (typeof window !== 'undefined') {
+          localStorage.setItem(profKey, JSON.stringify(prof));
+        }
+      }
+
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('nexus_active_user_id', matched.id);
+        localStorage.removeItem('nexus_demo_active');
+        document.cookie = 'nexus_auth_session=true; path=/; max-age=2592000; SameSite=Lax';
+        document.cookie = 'nexus_demo_active=; path=/; max-age=0; SameSite=Lax';
+      }
+
+      setIsDemo(false);
+      setProfile(prof);
+      setUser({
+        id: matched.id,
+        email: matched.email,
+        user_metadata: { username: matched.username },
+        app_metadata: {},
+        aud: 'authenticated',
+        created_at: matched.created_at,
+      } as unknown as User);
+
       return { error: null };
     }
 
+    // Supabase Cloud Mode
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     return { error: error?.message ?? null };
   };
 
   const loginAsDemo = async () => {
     setIsDemo(true);
-    const stored = typeof window !== 'undefined' ? localStorage.getItem(DEMO_PROFILE_STORAGE_KEY) : null;
-    const prof = stored ? JSON.parse(stored) : INITIAL_DEMO_PROFILE;
-    setProfile(prof);
+    let prof = INITIAL_DEMO_PROFILE;
+
     if (typeof window !== 'undefined') {
+      localStorage.removeItem('nexus_active_user_id');
       localStorage.setItem('nexus_demo_active', 'true');
-      localStorage.setItem(DEMO_PROFILE_STORAGE_KEY, JSON.stringify(prof));
       document.cookie = 'nexus_demo_active=true; path=/; max-age=2592000; SameSite=Lax';
+      document.cookie = 'nexus_auth_session=; path=/; max-age=0; SameSite=Lax';
+
+      const stored = localStorage.getItem(DEMO_PROFILE_STORAGE_KEY);
+      if (stored) {
+        try {
+          prof = JSON.parse(stored);
+        } catch {
+          prof = INITIAL_DEMO_PROFILE;
+        }
+      } else {
+        localStorage.setItem(DEMO_PROFILE_STORAGE_KEY, JSON.stringify(INITIAL_DEMO_PROFILE));
+      }
     }
-    setUser({
-      ...STATIC_DEMO_USER,
-      user_metadata: { username: prof.username },
-    });
+
+    setProfile(prof);
+    setUser(STATIC_DEMO_USER);
   };
 
   const signOut = async () => {
     if (typeof window !== 'undefined') {
       localStorage.removeItem('nexus_demo_active');
+      localStorage.removeItem('nexus_active_user_id');
       document.cookie = 'nexus_demo_active=; path=/; max-age=0; SameSite=Lax';
+      document.cookie = 'nexus_auth_session=; path=/; max-age=0; SameSite=Lax';
     }
     setIsDemo(false);
     if (configured) {

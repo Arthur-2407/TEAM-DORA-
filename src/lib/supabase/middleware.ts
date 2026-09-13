@@ -8,6 +8,24 @@ export async function updateSession(request: NextRequest) {
   });
 
   if (!isSupabaseConfigured()) {
+    const isDemo = request.cookies.get('nexus_demo_active')?.value === 'true';
+    const isAuthUser = request.cookies.get('nexus_auth_session')?.value === 'true';
+    const pathname = request.nextUrl.pathname;
+    const isAuthPage = pathname.startsWith('/login') || pathname.startsWith('/signup');
+    const isPublicPage = pathname === '/' || pathname.startsWith('/api') || pathname.includes('.');
+
+    if ((isDemo || isAuthUser) && isAuthPage) {
+      const url = request.nextUrl.clone();
+      url.pathname = '/dashboard';
+      return NextResponse.redirect(url);
+    }
+
+    if (!isDemo && !isAuthUser && !isAuthPage && !isPublicPage) {
+      const url = request.nextUrl.clone();
+      url.pathname = '/login';
+      return NextResponse.redirect(url);
+    }
+
     return supabaseResponse;
   }
 
