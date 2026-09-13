@@ -1,0 +1,5 @@
+User-Agent: *
+Allow: /
+Disallow: /api/
+
+Sitemap: https://arthur-2407.github.io/TEAM-DORA-/sitemap.xml
