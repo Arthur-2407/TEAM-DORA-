@@ -9,6 +9,6 @@ export default function robots(): MetadataRoute.Robots {
       allow: '/',
       disallow: ['/api/'],
     },
-    sitemap: 'https://nexus-protocol.vercel.app/sitemap.xml',
+    sitemap: 'https://arthur-2407.github.io/TEAM-DORA-/sitemap.xml',
   };
 }
