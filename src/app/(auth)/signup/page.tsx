@@ -76,8 +76,13 @@ export default function SignupPage() {
       )}
 
       {error && (
-        <div className="p-3 mb-5 rounded-lg bg-[rgba(255,51,102,0.15)] border border-[#ff3366] text-[#ff3366] text-xs font-mono">
-          {error}
+        <div className="p-3.5 mb-5 rounded-lg bg-[rgba(255,51,102,0.15)] border border-[#ff3366] text-[#ff3366] text-xs font-mono leading-relaxed">
+          <p className="font-bold mb-1">⚠️ {error}</p>
+          {error.toLowerCase().includes('rate limit') && (
+            <p className="text-[11px] text-white/80 mt-1.5 pt-1.5 border-t border-[#ff3366]/30">
+              Supabase default free email service allows only 2-3 confirmation emails per hour. To enable instant operative registration without email limits, go to <strong>Supabase Dashboard &rarr; Auth &rarr; Providers &rarr; Email</strong> and turn <strong>Confirm email OFF</strong>.
+            </p>
+          )}
         </div>
       )}
 
